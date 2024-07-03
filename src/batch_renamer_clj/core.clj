@@ -6,28 +6,8 @@
   (:gen-class))
 
 (def rgx
-  {:path  #".*\/(?=\w*\.jpg$)"
-   :2dirs #"\w*\/\w*\/(?=\w*\.jpg$)"
+  {:2dirs #"\w*\/\w*\/(?=\w*\.jpg$)"
    :file #"\w*\.jpg"})
-
-(defn new-name [path i]
-  (string/replace
-   path
-   (:path rgx)
-   (str (string/replace (or (re-find (:2dirs rgx) path) "") "/" "") i ".jpg")))
-
-(defn temp-name [path i] (string/replace path (:file rgx) (str "TEMP" i ".jpg")))
-
-(defn generate-names [files]
-  (loop [i 0 files files [temps news] []]
-    (if (empty? files)
-      (map reverse [temps news])
-      (recur
-       (+ i 1)
-       (drop 1 files)
-       (let [path (.getAbsolutePath (first files))]
-         [(conj temps (File. (temp-name path i)))
-          (conj news (File. (new-name path i)))])))))
 
 (defn extract-exif-date [f]
   (or
@@ -36,45 +16,42 @@
    "0"))
 
 (defn get-files [dir]
-  (when (.isDirectory dir)
-    (filter #(string/ends-with? % ".jpg") (seq (.listFiles dir)))))
-
-(defn get-paths [dir]
-  (let [files (sort-by #(extract-exif-date %) (get-files dir)) [temps news] (generate-names files)]
-    [files  temps news]))
-
-(defn get-dirs [dir]
-  (loop [dirs [dir] result []]
+  (loop [dirs [dir] files []]
     (if (empty? dirs)
-      result
-      (let [this-dir (first dirs)]
+      files
+      (let [dir-ls (->> (first dirs) (.listFiles) (group-by #(.isDirectory %)))]
         (recur
-         (concat (rest dirs) (filter #(.isDirectory %) (.listFiles this-dir)))
-         (conj result this-dir))))))
+         (concat (rest dirs) (dir-ls true))
+         (conj files (dir-ls false)))))))
 
-(defn get-new-names [dirs]
-  (loop [dirs dirs [rsorted rtemps rnews] []]
-    (if (empty? dirs)
-      [rsorted rtemps rnews]
-      (let [[sorted temps news] (get-paths (first dirs))]
-        (recur
-         (drop 1 dirs)
-         [(concat sorted rsorted)
-          (concat temps rtemps)
-          (concat news rnews)])))))
-    ;(.renameTo temp new))
+(defn get-names [files]
+  (for [files files]
+    (let [sorted 
+          (->> files (filter #(-> % (string/ends-with? ".jpg"))) (sort-by #(extract-exif-date %)))
+          [temps news]
+          (map
+           (fn [func] (map-indexed #(File. (func %1 %2)) (map #(.getAbsolutePath %) sorted)))
+           [#(string/replace %2 (:file rgx) (str "TEMP" %1 ".jpg"))
+            #(string/replace
+              %2
+              (:file rgx)
+              (str (string/replace (or (re-find (:2dirs rgx) %2) "") "/" "") %1 ".jpg"))])]
+      [sorted temps news])))
 
-(defn rename-files [[froms temps news]]
-  (doseq [[from temp] (map vector froms temps)]
-    (println (.getPath from) " >> " (.getPath temp)))
+(defn rename-files [dirs]
+  (doseq [[froms temps news] dirs]
+    (doseq [[from temp] (map list froms temps)]
+      (println (.getPath from) " >> " (.getPath temp))
     ;(.renameTo from temp)
-  (doseq [[temp new] (map vector temps news)]
-    (println (.getPath temp) " >> " (.getPath new))))
-
+      )
+    (doseq [[temp new] (map list temps news)]
+      (println (.getPath temp) " >> " (.getPath new))
+    ;(.renameTo temp new)
+      )))
 
 (defn -main
   [& args]
   (let [root (File. (first args))]
     (if (.exists root)
-      (-> root (get-dirs) (get-new-names) (rename-files))
+      (-> root (get-files) (get-names) (rename-files))
       (println (.getAbsolutePath root) " exist. doesnt lol"))))
